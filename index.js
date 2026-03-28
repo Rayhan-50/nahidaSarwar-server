@@ -10,18 +10,26 @@ const port = process.env.PORT || 5000;
 // Middleware options
 const corsOptions = {
   origin: [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "https://nahida-sarwar.web.app", 
-    process.env.CLIENT_ADDRESS,
-    process.env.DEV_CLIENT
+    // "http://localhost:5173",
+    // "http://localhost:5174",
+    // "https://vote.niva.now",
+    // process.env.CLIENT_ADDRESS,
+    // process.env.DEV_CLIENT,
+    // /\.vercel\.app$/
+    "*",
   ],
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   withCredentials: true,
 };
 
 // middleware
-app.use(cors(corsOptions));
+// app.use(cors(corsOptions));
+app.use(
+  cors({
+    origin: "*",
+  })
+);
+
 app.use(express.json());
 
 
@@ -244,6 +252,35 @@ async function run() {
       res.send(result);
     });
 
+    // News Management
+    const newsCollection = client.db("nahidasarwar").collection("news");
+
+    app.get('/news', async (req, res) => {
+      const result = await newsCollection.find().sort({ date: -1 }).toArray();
+      res.send(result);
+    });
+
+    app.post('/news', verifyToken, verifyAdmin, async (req, res) => {
+      const newsItem = req.body;
+      const result = await newsCollection.insertOne(newsItem);
+      res.send(result);
+    });
+
+    app.delete('/news/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const result = await newsCollection.deleteOne({ _id: new ObjectId(id) });
+      res.send(result);
+    });
+
+    app.patch('/news/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const updateData = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = { $set: updateData };
+      const result = await newsCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+
     // Stats Endpoint (Dashboard & Home)
     app.get('/stats', async (req, res) => {
       try {
@@ -255,12 +292,87 @@ async function run() {
           res.send({
             activeSupporters: 0,
             organizedCommunity: 0,
-            raisedFunds: 0
+            raisedFunds: 0,
+            totalSpent: 0,
+            newsLink: "https://www.prothomalo.com/world"
           });
         }
       } catch (error) {
         console.error("Stats Fetch Error:", error);
         res.status(500).send({ message: "Failed to fetch stats" });
+      }
+    });
+
+    // Expenses Management
+    const expenseCollection = client.db("nahidasarwar").collection("expenses");
+
+    app.get('/expenses', async (req, res) => {
+      try {
+        const result = await expenseCollection.find().sort({ date: -1 }).toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching expenses:", error);
+        res.status(500).send({ message: "Failed to fetch expenses" });
+      }
+    });
+
+    app.post('/expenses', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const expense = req.body;
+        // Ensure proper types
+        expense.amount = parseFloat(expense.amount);
+        // If date provided, use it, else current date
+        expense.date = expense.date ? new Date(expense.date) : new Date();
+
+        const result = await expenseCollection.insertOne(expense);
+        res.send(result);
+      } catch (error) {
+        console.error("Error adding expense:", error);
+        res.status(500).send({ message: "Failed to add expense" });
+      }
+    });
+
+    app.delete('/expenses/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const result = await expenseCollection.deleteOne({ _id: new ObjectId(id) });
+      res.send(result);
+    });
+
+    app.get('/expense-stats', async (req, res) => {
+      try {
+        // Calculate Total Raised from Donations
+        // Convert strings to double if necessary (safe fallback)
+        const donationStats = await donationCollection.aggregate([
+          {
+            $group: {
+              _id: null,
+              totalAmount: { $sum: { $toDouble: "$amount" } }
+            }
+          }
+        ]).toArray();
+        const totalRaised = donationStats.length > 0 ? donationStats[0].totalAmount : 0;
+
+        // Calculate Total Spent from Expenses
+        const expenseStats = await expenseCollection.aggregate([
+          {
+            $group: {
+              _id: null,
+              totalAmount: { $sum: "$amount" }
+            }
+          }
+        ]).toArray();
+        const totalSpent = expenseStats.length > 0 ? expenseStats[0].totalAmount : 0;
+
+        const currentBalance = totalRaised - totalSpent;
+
+        res.send({
+          totalRaised,
+          totalSpent,
+          currentBalance
+        });
+      } catch (error) {
+        console.error("Expense Stats Error:", error);
+        res.status(500).send({ message: "Failed to fetch expense stats" });
       }
     });
 
